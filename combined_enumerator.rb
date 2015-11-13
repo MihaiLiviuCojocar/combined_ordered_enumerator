@@ -1,55 +1,109 @@
-# The aim of this class is to take a number of ordered enumerators and then
-# emit their values in ascending order.
-#
-# Some assumptions:
-#   * The enumerators passed in emit their values in ascending order.
-#   * The enumerators emit values which are Comparable[1] with each other.
-#   * The enumerators can be finite *or* infinite.
-#
-# This requires Ruby 1.9. The Enumerator[2] documentation might be useful.
-#
-# [1] http://www.ruby-doc.org/core-1.9.3/Comparable.html
-# [2] http://www.ruby-doc.org/core-1.9.3/Enumerator.html
-#
-# This is a stub implementation that causes failures in in the test suite, but
-# no errors.
-#
-# You can run the test suite with: `ruby combined_enumerator.rb`.
-
 class CombinedOrderedEnumerator < Enumerator
   class UnorderedEnumerator < RuntimeError
     attr_reader :enumerator
 
-    def initialize( enum )
-      @enumerator = enum
+    def initialize(enumerator)
+      @enumerator = enumerator
     end
   end
 
   def initialize(*args)
-    @enums = args
+    super() do |yielder|
+      unless args.empty?
+        initial_value = enumerator_with_smallest_next_value(args).first
+
+        loop do
+          enum = enumerator_with_smallest_next_value(args)
+          value_to_be_yielded = enum.next
+          raise UnorderedEnumerator.new(enum) if descending_values?(initial_value, value_to_be_yielded)
+          yielder.yield(value_to_be_yielded)
+          initial_value = value_to_be_yielded
+        end
+      end
+    end
   end
 
-  def take(number)
-    @enums.map do |enum|
-      raise CombinedOrderedEnumerator::UnorderedEnumerator.new(enum) unless enum.ascending?
-      enum.take(number)
-    end.flatten.sort[0...number]
+  private
+
+  def enumerator_with_smallest_next_value(enums)
+    enums.reduce { |memo, enum| memo < enum ? memo : enum }
+  end
+
+  def descending_values?(first_value, second_value)
+    first_value > second_value
   end
 end
 
 class Enumerator
-  def ascending?
-    self.next < self.next rescue StopIteration
-  end
-test_enumerating_an_infinite_sequence_and_finite_one
+  include Comparable
 
-# --------------------------------------------------
+  def <=>(another)
+    return  1 if self.last_iteration?
+    return -1 if another.last_iteration?
+    self.peek <=> another.peek
+  end
+
+  def last_iteration?
+    begin
+      return false if peek
+    rescue StopIteration
+      return true
+    end
+  end
+end
+
+
+# ================================================
 # TESTS
-# --------------------------------------------------
+# ================================================
+
 
 if $0 == __FILE__
   require 'minitest/autorun'
   require 'minitest/pride'
+
+  class EnumeratorTest < MiniTest::Unit::TestCase
+    def test_comparing_an_empty_array_and_a_finite_enumerator
+      enumerator_one = [].to_enum
+      enumerator_two = [1,2].to_enum
+      assert_equal false, enumerator_one < enumerator_two
+    end
+
+    def test_comparing_a_finite_enumerator_and_an_empty_array
+      enumerator_one = [1,2].to_enum
+      enumerator_two = [].to_enum
+      assert_equal true, enumerator_one < enumerator_two
+    end
+
+    def test_comparing_two_finite_enumerators
+      enumerator_one = [1,2].to_enum
+      enumerator_two = [2,3].to_enum
+      assert_equal true, enumerator_one < enumerator_two
+    end
+
+    def test_comparing_two_finite_enumerators_reversed
+      enumerator_one = [2,3].to_enum
+      enumerator_two = [1,2].to_enum
+      assert_equal false, enumerator_one < enumerator_two
+    end
+
+    def test_knows_if_there_is_no_next_iteration
+      enumerator = [].to_enum
+      assert_equal true, enumerator.last_iteration?
+    end
+
+    def test_knows_if_there_is_a_next_iteration
+      enumerator = [1].to_enum
+      assert_equal false, enumerator.last_iteration?
+    end
+
+    def test_knows_if_the_end_of_the_iteration_has_been_reached
+      enumerator = [1].to_enum
+      enumerator.next
+      assert_equal true, enumerator.last_iteration?
+    end
+  end
+
 
   class CombinedOrderedEnumeratorTest < MiniTest::Unit::TestCase
     def test_enumerating_nothing
@@ -99,6 +153,14 @@ if $0 == __FILE__
 
     def test_raises_unordered_enumerator_exception_if_enumerator_isnt_in_ascending_order
       enumerator = CombinedOrderedEnumerator.new(10.downto(1))
+
+      assert_raises(CombinedOrderedEnumerator::UnorderedEnumerator) do
+        enumerator.take(20)
+      end
+    end
+
+    def test_raises_unordered_enumerator_exception_if_enumerator_isnt_in_ascending_order
+      enumerator = CombinedOrderedEnumerator.new([1,3,2].to_enum)
 
       assert_raises(CombinedOrderedEnumerator::UnorderedEnumerator) do
         enumerator.take(20)
